@@ -44,9 +44,6 @@ class medoo
     public function __construct($options = null)
     {
         try {
-            $commands = array();
-            $dsn = '';
-
             if (is_array($options))
             {
                 foreach ($options as $option => $value)
@@ -67,7 +64,6 @@ class medoo
                 $port = $this->port;
             }
 
-            $set_charset = "SET NAMES '" . $this->charset . "'";
             $type = strtolower($this->database_type);
             $is_port = isset($port);
 
