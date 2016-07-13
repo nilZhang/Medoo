@@ -87,22 +87,14 @@ class medoo
                     } else {
                         $dsn = $type . ':host=' . $this->server . ($is_port ? ';port=' . $port : '') . ';dbname=' . $this->database_name.';charset=utf8';
                     }
-                    // Make MySQL using standard quoted identifier
-                    // $commands[] = 'SET SQL_MODE=ANSI_QUOTES';
-                    // $commands[] = $set_charset;
+                   
                     break;
 
                 default:
                     throw new \Exception('only support mysql',500);
             }
 
-            if (
-                in_array($type, array('mariadb', 'mysql', 'pgsql', 'sybase', 'mssql')) &&
-                $this->charset
-            )
-            {
-                $commands[] = "SET NAMES '" . $this->charset . "'";
-            }
+            
 
             $this->pdo = new PDO(
                 $dsn,
@@ -111,10 +103,7 @@ class medoo
                 $this->option
             );
 
-            foreach ($commands as $value)
-            {
-                $this->pdo->exec($value);
-            }
+           
         }
         catch (PDOException $e) {
             throw new Exception($e->getMessage());
@@ -165,6 +154,9 @@ class medoo
 
     protected function column_quote($string)
     {
+        if ($string[0] == '#') {
+            return str_replace('.', '`.`', preg_replace('/(^#|\(JSON\))/', '', $string));
+        }
         preg_match('/(\(JSON\)\s*|^#)?([a-zA-Z0-9_]*)\.([a-zA-Z0-9_]*)/', $string, $column_match);
 
         if (isset($column_match[ 2 ], $column_match[ 3 ]))
@@ -174,6 +166,7 @@ class medoo
 
         return '`' . $string . '`';
     }
+
 
     protected function column_push(&$columns)
     {
@@ -436,7 +429,7 @@ class medoo
 
                 if (is_array($MATCH) && isset($MATCH[ 'columns' ], $MATCH[ 'keyword' ]))
                 {
-                    $where_clause .= ($where_clause != '' ? ' AND ' : ' WHERE ') . ' MATCH ("' . str_replace('.', '"."', implode($MATCH[ 'columns' ], '", "')) . '") AGAINST (' . $this->quote($MATCH[ 'keyword' ]) . ')';
+                    $where_clause .= ($where_clause != '' ? ' AND ' : ' WHERE ') . ' MATCH (`' . str_replace('.', '`.`', implode($MATCH[ 'columns' ], '`, `')) . '`) AGAINST (' . $this->quote($MATCH[ 'keyword' ]) . ')';
                 }
             }
 
@@ -478,7 +471,15 @@ class medoo
                 }
                 else
                 {
-                    $where_clause .= ' ORDER BY ' . $this->column_quote($ORDER);
+                    if(strpos($ORDER,' ')!==FALSE){
+                        list($column,$value)=explode(' ',$ORDER);
+                        if ($value === 'ASC' || $value === 'DESC'){
+                            $where_clause .= ' ORDER BY ' . $this->column_quote($column) . ' ' . $value;
+                        }
+                    }else{
+                        $where_clause .= ' ORDER BY ' . $this->column_quote($ORDER);
+                    }
+
                 }
             }
 
@@ -505,6 +506,12 @@ class medoo
                     {
                         $where_clause .= ' LIMIT ' . $LIMIT[ 0 ] . ',' . $LIMIT[ 1 ];
                     }
+                }
+            }
+            if (isset($where['FORCE_INDEX'])) {
+                $INDEX = $where['INDEX'];
+                if (!empty($INDEX)) {
+                    $where_clause = ' FORCE INDEX (' . $INDEX . ') ' . $where_clause;
                 }
             }
         }
@@ -560,7 +567,7 @@ class medoo
                 {
                     if (is_string($relation))
                     {
-                        $relation = 'USING ("' . $relation . '")';
+                        $relation = 'USING (`' . $relation . '`)';
                     }
 
                     if (is_array($relation))
@@ -568,7 +575,7 @@ class medoo
                         // For ['column1', 'column2']
                         if (isset($relation[ 0 ]))
                         {
-                            $relation = 'USING ("' . implode($relation, '", "') . '")';
+                            $relation = 'USING (`' . implode($relation, '`, `') . '`)';
                         }
                         else
                         {
@@ -582,7 +589,7 @@ class medoo
                                         $this->column_quote($key) :
 
                                         // For ['column1' => 'column2']
-                                        $table . '."' . $key . '"'
+                                        $table . '.`' . $key . '`'
                                 ) .
                                 ' = ' .
                                 $this->table_quote(isset($match[ 5 ]) ? $match[ 5 ] : $match[ 3 ]) . '."' . $value . '"';
@@ -803,6 +810,57 @@ class medoo
         }
 
         return count($lastId) > 1 ? $lastId : $lastId[ 0 ];
+    }
+    public function batch_insert($table, $datas) {
+        // Check indexed or associative array
+        if (!isset($datas[0])) {
+            $datas = array($datas);
+        }
+
+        $all_values = array();
+        foreach ($datas as $data) {
+
+            $values = array();
+
+            foreach ($data as $key => $value) {
+
+                switch (gettype($value)) {
+                    case 'NULL':
+                        $values[] = 'NULL';
+                        break;
+
+                    case 'array':
+                        preg_match("/\(JSON\)\s*([\w]+)/i", $key, $column_match);
+
+                        $values[] = isset($column_match[0]) ?
+                            $this->quote(json_encode($value)) :
+                            $this->quote(serialize($value));
+                        break;
+
+                    case 'boolean':
+                        $values[] = ($value ? '1' : '0');
+                        break;
+
+                    case 'integer':
+                    case 'double':
+                    case 'string':
+                        $values[] = $this->fn_quote($key, $value);
+                        break;
+                }
+            }
+            $all_values[] = '(' . join(', ', $values) . ')';
+        }
+        $sql = join(",", $all_values);
+        $columns = array_map(array($this, "column_quote"), array_keys($datas[0]));
+        $this->exec('INSERT INTO `' . $table . '` (' . implode(', ', $columns) . ') VALUES ' . $sql);
+        $lastId = $this->pdo->lastInsertId();
+
+        $lastIds = array();
+        for ($i = 0, $count = count($datas); $i < $count; $i++) {
+            $lastIds[] = $lastId + $i;
+        }
+
+        return $lastIds;
     }
 
     public function update($table, $data, $where = null)
