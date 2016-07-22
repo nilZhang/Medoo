@@ -230,7 +230,7 @@ class medoo
 
     protected function fn_quote($column, $string)
     {
-        return (strpos($column, '#') === 0 && preg_match('/^[A-Z0-9\_]*\([^)]*\)$/', $string)) ?
+        return (strpos($column, '#') === 0 || preg_match('/^[A-Z0-9\_]*\([^)]*\)$/', $string)) ?
 
             $string :
 
@@ -442,7 +442,6 @@ class medoo
             if (isset($where[ 'ORDER' ]))
             {
                 $ORDER = $where[ 'ORDER' ];
-
                 if (is_array($ORDER))
                 {
                     $stack = array();
@@ -467,16 +466,20 @@ class medoo
                 }
                 else
                 {
-                    if(strpos($ORDER,' ')!==FALSE){
-                        list($column,$value)=explode(' ',$ORDER);
-                        if ($value === 'ASC' || $value === 'DESC'){
-                            $where_clause .= ' ORDER BY ' . $this->column_quote($column) . ' ' . $value;
+                    if ( strpos( $ORDER, ' ' ) !== FALSE ) {
+                        list( $column, $value ) = explode( ' ', $ORDER );
+                        $value=strtoupper($value);
+                        if ( $value != 'ASC' ) {
+                            $value == 'DESC';
                         }
-                    }else{
-                        $where_clause .= ' ORDER BY ' . $this->column_quote($ORDER);
+                        $where_clause .= ' ORDER BY ' . $this->column_quote( $column ) . ' '
+                                         . $value;
+                    } else {
+                        $where_clause .= ' ORDER BY ' . $this->column_quote( $ORDER );
                     }
 
                 }
+
             }
 
             if (isset($where[ 'LIMIT' ]))
@@ -524,20 +527,27 @@ class medoo
 
     protected function select_context($table, $join, &$columns = null, $where = null, $column_fn = null)
     {
-        preg_match('/([a-zA-Z0-9_\-]*)\s*\(([a-zA-Z0-9_\-]*)\)/i', $table, $table_match);
-
-        if (isset($table_match[ 1 ], $table_match[ 2 ]))
-        {
-            $table = $this->table_quote($table_match[ 1 ]);
-
-            $table_query = $this->table_quote($table_match[ 1 ]) . ' AS ' . $this->table_quote($table_match[ 2 ]);
+        preg_match('/(?:([a-zA-Z0-9_\-]*)\.)?([a-zA-Z0-9_\-]*)(?:\(([a-zA-Z0-9_\-]*)\))?/i', $table, $table_match);
+        $table_query = $this->table_quote( $table_match[2] );
+        if ( ! empty( $table_match[1] ) ) {
+            $table_query = $this->table_quote( $table_match[1] ) . '.' . $table_query;
         }
-        else
-        {
-            $table = $this->table_quote($table);
-
-            $table_query = $table;
+        if ( ! empty( $table_match[3] ) ) {
+            $table_query .= ' AS ' . $this->table_quote( $table_match[3] );
         }
+
+//        if (isset($table_match[ 1 ], $table_match[ 2 ]))
+//        {
+//            $table = $this->table_quote($table_match[ 1 ]);
+//
+//            $table_query = $this->table_quote($table_match[ 1 ]) . ' AS ' . $this->table_quote($table_match[ 2 ]);
+//        }
+//        else
+//        {
+//            $table = $this->table_quote($table);
+//
+//            $table_query = $table;
+//        }
 
         $join_key = is_array($join) ? array_keys($join) : null;
 
@@ -955,6 +965,7 @@ class medoo
 
     public function get($table, $join = null, $columns = null, $where = null)
     {
+
         $column = $where == null ? $join : $columns;
 
         $is_single_column = (is_string($column) && $column !== '*');
